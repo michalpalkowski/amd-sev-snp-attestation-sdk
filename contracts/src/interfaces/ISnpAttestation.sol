@@ -17,6 +17,11 @@ struct VerifierInput {
     uint8 trustedCertsPrefixLen;
     bytes rawReport;
     bytes[] vekDerChain;
+    // Optional storage proof: when storageStateRoot != 0, keys/values are verified against the trie
+    bytes32 storageStateRoot;
+    bytes[] storageKeys;
+    bytes[] storageValues;
+    bytes[] storageProofNodes;
 }
 
 struct VerifierJournal {
@@ -27,6 +32,14 @@ struct VerifierJournal {
     bytes32[] certs;
     uint160[] certSerials;
     uint8 trustedCertsPrefixLen;
+    // Commitment to verified storage (keccak256(abi.encode(keys, values))). 0 when no storage proof.
+    bytes32 storageCommitment;
+}
+
+/// @dev Used to compute storage commitment: commitment = keccak256(abi.encode(StorageCommitmentInput(keys, values)))
+struct StorageCommitmentInput {
+    bytes[] keys;
+    bytes[] values;
 }
 
 enum ZkCoProcessorType {
