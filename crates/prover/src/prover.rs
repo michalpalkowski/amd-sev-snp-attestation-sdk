@@ -1,4 +1,4 @@
-use alloy_primitives::Bytes;
+use alloy_primitives::{Bytes, B256};
 use alloy_rpc_types::TransactionReceipt;
 use amd_sev_snp_attestation_verifier::{
     stub::{VerifierInput, VerifierJournal, ZkCoProcessorType},
@@ -13,23 +13,32 @@ use crate::{
     RawProofType, RemoteProverConfig, SnpVerifierContract, KDS,
 };
 
+#[cfg(feature = "pico")]
+use pico_methods::PICO_VERIFIER_ELF;
 #[cfg(feature = "risc0")]
 use risc0_methods::{self, RISC0_VERIFIER_ELF, RISC0_VERIFIER_ID};
 #[cfg(feature = "sp1")]
 use sp1_methods::{self, SP1_VERIFIER_ELF, SP1_VERIFIER_PK, SP1_VERIFIER_VK};
-#[cfg(feature = "pico")]
-use pico_methods::PICO_VERIFIER_ELF;
 
 #[cfg(feature = "sp1")]
 lazy_static! {
     pub static ref SP1_PROGRAM_VERIFIER: crate::ProgramSP1<ZkCoProcessorType, VerifierInput, VerifierJournal> =
-        crate::ProgramSP1::new(ZkCoProcessorType::Succinct, SP1_VERIFIER_ELF, &SP1_VERIFIER_VK, &SP1_VERIFIER_PK);
+        crate::ProgramSP1::new(
+            ZkCoProcessorType::Succinct,
+            SP1_VERIFIER_ELF,
+            &SP1_VERIFIER_VK,
+            &SP1_VERIFIER_PK
+        );
 }
 
 #[cfg(feature = "risc0")]
 lazy_static! {
     pub static ref RISC0_PROGRAM_VERIFIER: crate::ProgramRisc0<ZkCoProcessorType, VerifierInput, VerifierJournal> =
-        crate::ProgramRisc0::new(ZkCoProcessorType::RiscZero, RISC0_VERIFIER_ELF, *RISC0_VERIFIER_ID);
+        crate::ProgramRisc0::new(
+            ZkCoProcessorType::RiscZero,
+            RISC0_VERIFIER_ELF,
+            *RISC0_VERIFIER_ID
+        );
 }
 
 #[cfg(feature = "pico")]
@@ -93,15 +102,13 @@ impl AmdSevSnpProver {
                 }
             }
             #[cfg(feature = "pico")]
-            ProverSystemConfig::Pico(_system_cfg) => {
-                AmdSevSnpProver {
-                    kds: KDS::new(),
-                    contract,
-                    remote_prover_config: Err("Remote prover not supported for Pico".to_string()),
-                    cfg,
-                    verifier: Box::new(PICO_PROGRAM_VERIFIER.clone()),
-                }
-            }
+            ProverSystemConfig::Pico(_system_cfg) => AmdSevSnpProver {
+                kds: KDS::new(),
+                contract,
+                remote_prover_config: Err("Remote prover not supported for Pico".to_string()),
+                cfg,
+                verifier: Box::new(PICO_PROGRAM_VERIFIER.clone()),
+            },
         }
     }
 
@@ -211,6 +218,11 @@ impl AmdSevSnpProver {
         Ok(self.create_onchain_proof(proof)?)
     }
 
+    /// Returns attestation-only input; storage fields are empty. For storage proof, the caller
+    /// (e.g. a higher-level crate like `sharding_operator`) should set `input.storageStateRoot`,
+    /// `input.storageKeys`, `input.storageValues`, and `input.storageProofNodes` on the result,
+    /// then pass it to `gen_proof`. This keeps the SDK modular (attestation here, storage logic
+    /// in the operator).
     pub fn prepare_verifier_input(
         &self,
         timestamp: u64,
@@ -257,6 +269,10 @@ impl AmdSevSnpProver {
             trustedCertsPrefixLen: trusted_certs_prefix_len,
             rawReport: raw_report,
             vekDerChain: cert_chain.to_ders(),
+            storageStateRoot: B256::ZERO,
+            storageKeys: vec![],
+            storageValues: vec![],
+            storageProofNodes: vec![],
         })
     }
 
