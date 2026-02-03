@@ -155,3 +155,22 @@ fn decode_bonsai_multiproof(bytes: &[u8]) -> anyhow::Result<bonsai_trie::MultiPr
     }
     Ok(bonsai_trie::MultiProof(map))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::Bytes;
+
+    #[test]
+    fn test_compute_commitment_with_proof_data() {
+        // Exact data from the proof generation log
+        let key = Bytes::from(hex::decode("007ebcc807b5c7e19f245995a55aed6f46f5f582f476a886b91b834b0ddf5854").unwrap());
+        let value = Bytes::from(hex::decode("0000000000000000000000000000000000000000000000000000000000000003").unwrap());
+
+        let commitment = compute_commitment(&[key], &[value]);
+
+        println!("Commitment: {:#x}", commitment);
+        println!("Commitment bytes: {:?}", commitment.to_bytes_be());
+        assert_eq!(commitment, Felt::from_hex("0x5c5e91c4a356d59920f05d3f642f2ac12d6bb5820d4e824fae01d2228712385").unwrap());
+    }
+}
