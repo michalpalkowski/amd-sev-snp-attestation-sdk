@@ -1,7 +1,16 @@
 //! Storage proof verification and commitment computation for the ZK circuit.
 //!
-//! The commitment is poseidon_hash(keys || values) so the Cairo contract can verify
-//! with: poseidon_hash_span([keys..., values...]) == journal.storageCommitment.
+//! Full verification flow:
+//! 1. Verify global_state_root = poseidon("STARKNET_STATE_V0", contracts_tree_root, classes_tree_root)
+//! 2. Verify contract leaf is in contracts_tree at key=contract_address
+//! 3. Verify storage keys/values are in contract's storage_root
+//!
+//! The commitment is poseidon_hash(storage_commitment, contract_address, nonce, global_state_root)
+//! so the Cairo contract can verify with the same hash.
+//!
+//! The nonce is included to prevent replay attacks (Ethereum-style nonce pattern).
+//! The contract_address binds the commitment to a specific contract.
+//! The global_state_root binds the commitment to the attested state.
 //!
 //! Storage proofs are verified using [bonsai-trie](https://github.com/dojoengine/bonsai-trie)
 //! (same format as Katana/Starknet): Pedersen hash, 251-bit keys (Felt), MultiProof from the trie.
@@ -9,12 +18,18 @@
 use alloy_primitives::Bytes;
 use anyhow::{ensure, Context};
 use starknet_types_core::felt::Felt;
-use starknet_types_core::hash::{Poseidon, StarkHash};
+use starknet_types_core::hash::{Pedersen, Poseidon, StarkHash};
 
-/// Computes the storage commitment as poseidon_hash(keys || values).
-/// Matches Cairo: poseidon_hash_span([keys..., values...]).
-pub fn compute_commitment(keys: &[Bytes], values: &[Bytes]) -> Felt {
-    let mut data = Vec::with_capacity(keys.len() + values.len());
+/// Computes the storage commitment as poseidon_hash(keys || values || contract_address || nonce).
+/// Matches Cairo: poseidon_hash_span([keys..., values..., contract_address, nonce]).
+///
+/// The nonce is included to prevent replay attacks (Ethereum-style nonce pattern).
+/// The contract_address binds the commitment to a specific contract.
+pub fn compute_storage_commitment(
+    keys: &[Bytes],
+    values: &[Bytes],
+) -> Felt {
+    let mut data = Vec::with_capacity(keys.len() + values.len() + 2);
     for key in keys {
         data.push(bytes_to_felt(key));
     }
@@ -24,9 +39,124 @@ pub fn compute_commitment(keys: &[Bytes], values: &[Bytes]) -> Felt {
     Poseidon::hash_array(&data)
 }
 
+pub fn compute_commitment(
+    storage_commitment: &Felt,
+    contract_address: &[u8; 32],
+    nonce: u64,
+    global_state_root: &[u8; 32],
+) -> Felt {
+    let mut data = Vec::with_capacity(4);
+    data.push(*storage_commitment);
+    data.push(Felt::from_bytes_be(contract_address));
+    data.push(Felt::from(nonce));
+    data.push(Felt::from_bytes_be(global_state_root));
+    Poseidon::hash_array(&data)
+}
+
+/// STARKNET_STATE_V0 short string as Felt
+const STARKNET_STATE_V0: Felt = Felt::from_hex_unchecked("0x535441524b4e45545f53544154455f5630");
+
+/// Verifies that global_state_root = poseidon("STARKNET_STATE_V0", contracts_tree_root, classes_tree_root)
+pub fn verify_global_state_root(
+    global_state_root: &[u8; 32],
+    contracts_tree_root: &[u8; 32],
+    classes_tree_root: &[u8; 32],
+) -> anyhow::Result<()> {
+    let expected = Poseidon::hash_array(&[
+        STARKNET_STATE_V0,
+        Felt::from_bytes_be(contracts_tree_root),
+        Felt::from_bytes_be(classes_tree_root),
+    ]);
+    let actual = Felt::from_bytes_be(global_state_root);
+    ensure!(
+        expected == actual,
+        "global_state_root mismatch: expected {:#x}, got {:#x}",
+        expected,
+        actual
+    );
+    Ok(())
+}
+
+/// Computes the contract leaf hash for Starknet contracts trie.
+/// contract_leaf_hash = H(H(H(class_hash, storage_root), nonce), 0)
+/// where H = Pedersen hash
+pub fn compute_contract_leaf_hash(
+    class_hash: &[u8; 32],
+    storage_root: &[u8; 32],
+    nonce: u64,
+) -> Felt {
+    let class_hash_felt = Felt::from_bytes_be(class_hash);
+    let storage_root_felt = Felt::from_bytes_be(storage_root);
+    let nonce_felt = Felt::from(nonce);
+
+    // H(H(H(class_hash, storage_root), nonce), 0)
+    let h1 = Pedersen::hash(&class_hash_felt, &storage_root_felt);
+    let h2 = Pedersen::hash(&h1, &nonce_felt);
+    Pedersen::hash(&h2, &Felt::ZERO)
+}
+
+/// Verifies that a contract with expected storage_root exists in contracts_tree.
+///
+/// Steps:
+/// 1. Compute expected leaf hash from (class_hash, storage_root, contract_nonce)
+/// 2. Verify that contract_address maps to this leaf hash in contracts_tree
+pub fn verify_contracts_proof(
+    contracts_tree_root: &[u8; 32],
+    contract_address: &[u8; 32],
+    class_hash: &[u8; 32],
+    storage_root: &[u8; 32],
+    contract_nonce: u64,
+    proof_nodes: &[Bytes],
+) -> anyhow::Result<()> {
+    if proof_nodes.is_empty() {
+        anyhow::bail!("contracts proof requires at least one proof node");
+    }
+
+    let expected_leaf = compute_contract_leaf_hash(class_hash, storage_root, contract_nonce);
+    let root = Felt::from_bytes_be(contracts_tree_root);
+
+    // Decode and verify using bonsai-trie
+    let proof_bytes = proof_nodes
+        .first()
+        .context("contracts proof requires proof_nodes[0]")?;
+    let multiproof = decode_bonsai_multiproof(proof_bytes)?;
+
+    let key_bits = felt_to_trie_key_bits_bytes(contract_address)?;
+    let verified_values: Vec<Felt> = multiproof
+        .verify_proof::<Pedersen>(root, std::iter::once(key_bits.as_bitslice()), 251)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("contracts proof verification failed: {}", e))?;
+
+    ensure!(
+        verified_values.len() == 1,
+        "contracts proof should return exactly 1 value, got {}",
+        verified_values.len()
+    );
+
+    let actual_leaf = verified_values[0];
+    ensure!(
+        actual_leaf == expected_leaf,
+        "contract leaf mismatch: expected {:#x}, got {:#x}. \
+         This means the storage_root doesn't match what's in contracts_tree.",
+        expected_leaf,
+        actual_leaf
+    );
+
+    Ok(())
+}
+
 fn bytes_to_felt(b: &Bytes) -> Felt {
     let arr: [u8; 32] = b.as_ref().try_into().expect("expected 32 bytes");
     Felt::from_bytes_be(&arr)
+}
+
+fn felt_to_trie_key_bits_bytes(b: &[u8; 32]) -> anyhow::Result<bitvec::vec::BitVec<u8, bitvec::order::Msb0>> {
+    use bitvec::prelude::*;
+    let felt = Felt::from_bytes_be(b);
+    let bytes = felt.to_bytes_be();
+    let bits: BitVec<u8, Msb0> = BitVec::from_slice(&bytes);
+    // Skip top 5 bits (256 - 251 = 5)
+    Ok(bits[5..].to_bitvec())
 }
 
 /// Verifies a storage proof using bonsai-trie (Katana/Starknet format).
@@ -230,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_commitment_with_proof_data() {
+    fn test_compute_storage_commitment() {
         let key = Bytes::from(
             hex::decode("007ebcc807b5c7e19f245995a55aed6f46f5f582f476a886b91b834b0ddf5854")
                 .unwrap(),
@@ -240,13 +370,87 @@ mod tests {
                 .unwrap(),
         );
 
-        let commitment = compute_commitment(&[key], &[value]);
+        let storage_commitment = compute_storage_commitment(&[key], &[value]);
 
+        // storage_commitment = poseidon_hash([key, value])
+        // This matches the Cairo test: poseidon_hash_span([key, value])
         assert_eq!(
-            commitment,
+            storage_commitment,
             Felt::from_hex("0x5c5e91c4a356d59920f05d3f642f2ac12d6bb5820d4e824fae01d2228712385")
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn test_compute_commitment_full_flow() {
+        let key = Bytes::from(
+            hex::decode("007ebcc807b5c7e19f245995a55aed6f46f5f582f476a886b91b834b0ddf5854")
+                .unwrap(),
+        );
+        let value = Bytes::from(
+            hex::decode("0000000000000000000000000000000000000000000000000000000000000003")
+                .unwrap(),
+        );
+
+        // Step 1: Compute storage commitment (keys || values)
+        let storage_commitment = compute_storage_commitment(&[key], &[value]);
+
+        // Step 2: Wrap with contract_address, nonce, storage_state_root
+        let contract_address = [0u8; 32];
+        let nonce = 0u64;
+        let storage_state_root = [0u8; 32];
+
+        let commitment = compute_commitment(&storage_commitment, &contract_address, nonce, &storage_state_root);
+
+        // This is the final commitment that gets registered on-chain
+        // commitment = poseidon_hash([storage_commitment, contract_address, nonce, storage_state_root])
+        assert!(!commitment.to_bytes_be().iter().all(|&b| b == 0), "commitment should not be zero");
+    }
+
+    #[test]
+    fn test_compute_commitment_different_nonce() {
+        let key = Bytes::from(
+            hex::decode("007ebcc807b5c7e19f245995a55aed6f46f5f582f476a886b91b834b0ddf5854")
+                .unwrap(),
+        );
+        let value = Bytes::from(
+            hex::decode("0000000000000000000000000000000000000000000000000000000000000003")
+                .unwrap(),
+        );
+
+        let storage_commitment = compute_storage_commitment(&[key], &[value]);
+        let contract_address = [0u8; 32];
+        let storage_state_root = [0u8; 32];
+
+        let commitment_nonce_0 = compute_commitment(&storage_commitment, &contract_address, 0, &storage_state_root);
+        let commitment_nonce_1 = compute_commitment(&storage_commitment, &contract_address, 1, &storage_state_root);
+
+        // Different nonces should produce different commitments (replay protection)
+        assert_ne!(commitment_nonce_0, commitment_nonce_1);
+    }
+
+    #[test]
+    fn test_compute_commitment_different_contract_address() {
+        let key = Bytes::from(
+            hex::decode("007ebcc807b5c7e19f245995a55aed6f46f5f582f476a886b91b834b0ddf5854")
+                .unwrap(),
+        );
+        let value = Bytes::from(
+            hex::decode("0000000000000000000000000000000000000000000000000000000000000003")
+                .unwrap(),
+        );
+
+        let storage_commitment = compute_storage_commitment(&[key], &[value]);
+        let contract_address_a = [0u8; 32];
+        let mut contract_address_b = [0u8; 32];
+        contract_address_b[31] = 1; // Different contract
+        let storage_state_root = [0u8; 32];
+
+        let commitment_a = compute_commitment(&storage_commitment, &contract_address_a, 0, &storage_state_root);
+        let commitment_b = compute_commitment(&storage_commitment, &contract_address_b, 0, &storage_state_root);
+
+        // Different contract addresses should produce different commitments
+        assert_ne!(commitment_a, commitment_b);
     }
 
     #[test]

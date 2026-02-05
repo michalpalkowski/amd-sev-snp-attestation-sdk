@@ -269,10 +269,22 @@ impl AmdSevSnpProver {
             trustedCertsPrefixLen: trusted_certs_prefix_len,
             rawReport: raw_report,
             vekDerChain: cert_chain.to_ders(),
-            storageStateRoot: B256::ZERO,
+            // Global state verification
+            globalStateRoot: B256::ZERO,
+            contractsTreeRoot: B256::ZERO,
+            classesTreeRoot: B256::ZERO,
+            // Contracts tree proof
+            contractsProofNodes: vec![],
+            contractStorageRoot: B256::ZERO,
+            contractClassHash: B256::ZERO,
+            contractLeafNonce: 0,
+            // Storage proof
             storageKeys: vec![],
             storageValues: vec![],
             storageProofNodes: vec![],
+            // Replay protection
+            contractAddress: B256::ZERO,
+            nonce: 0,
         })
     }
 

@@ -17,11 +17,22 @@ struct VerifierInput {
     uint8 trustedCertsPrefixLen;
     bytes rawReport;
     bytes[] vekDerChain;
-    // Optional storage proof: when storageStateRoot != 0, keys/values are verified against the trie
-    bytes32 storageStateRoot;
+    // Global state verification (matches attestation report_data)
+    bytes32 globalStateRoot;
+    bytes32 contractsTreeRoot;
+    bytes32 classesTreeRoot;
+    // Contracts tree proof: verifies contract is in contracts_tree with expected storage_root
+    bytes[] contractsProofNodes;
+    bytes32 contractStorageRoot;  // Expected storage_root from contract leaf
+    bytes32 contractClassHash;    // For computing contract leaf hash
+    uint64 contractLeafNonce;     // Contract's nonce (different from replay protection nonce)
+    // Storage proof: verifies keys/values are in contract's storage trie
     bytes[] storageKeys;
     bytes[] storageValues;
     bytes[] storageProofNodes;
+    // Nonce-based replay protection (Ethereum-style): commitment = hash(storage_commitment, contractAddress, nonce, globalStateRoot)
+    bytes32 contractAddress;
+    uint64 nonce;
 }
 
 struct VerifierJournal {
