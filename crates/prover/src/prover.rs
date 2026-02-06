@@ -65,6 +65,9 @@ impl AmdSevSnpProver {
         match &cfg.system {
             #[cfg(feature = "sp1")]
             ProverSystemConfig::Succinct(system_cfg) => {
+                if let Some(mode) = &system_cfg.prover_mode {
+                    std::env::set_var("SP1_PROVER", mode);
+                }
                 if let Some(api_url) = &system_cfg.rpc_url {
                     std::env::set_var("NETWORK_RPC_URL", api_url);
                 }

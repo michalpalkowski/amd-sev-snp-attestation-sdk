@@ -19,6 +19,10 @@ use crate::{
 pub struct SP1ProverConfig {
     pub private_key: Option<String>,
     pub rpc_url: Option<String>,
+    /// SP1 prover mode: "network", "cpu", or "mock".
+    /// When set, `AmdSevSnpProver::new()` writes this to the `SP1_PROVER` env var
+    /// so callers don't need `unsafe set_var` themselves.
+    pub prover_mode: Option<String>,
 }
 
 impl Default for SP1ProverConfig {
@@ -30,6 +34,7 @@ impl Default for SP1ProverConfig {
                 .ok()
                 .or_else(|| std::env::var("SP1_PRIVATE_KEY").ok()),
             rpc_url: std::env::var("SP1_RPC_URL").ok(),
+            prover_mode: std::env::var("SP1_PROVER").ok(),
         }
     }
 }

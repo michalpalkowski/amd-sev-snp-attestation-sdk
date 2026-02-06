@@ -80,6 +80,7 @@ impl ProverArgs {
             return Ok(ProverConfig::sp1_with(SP1ProverConfig {
                 private_key: self.sp1_private_key.clone(),
                 rpc_url: self.sp1_rpc_url.clone(),
+                prover_mode: None,
             }));
         }
 
