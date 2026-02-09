@@ -190,20 +190,31 @@ fn write_hash_entry(page: &mut [u8; 4096], pos: &mut usize, guid: &[u8; 16], has
     *pos += 32;
 }
 
-/// Performs a single GCTX page update: `ld = SHA384(ld || page_contents || page_metadata)`.
+/// Performs a single GCTX page update: `ld = SHA384(ld || contents || page_metadata)`.
 ///
 /// The page_info buffer (4256 bytes) consists of:
 /// - [0..48]:     current launch digest (48 bytes)
-/// - [48..4144]:  page contents (4096 bytes)
+/// - [48..4144]:  page contents field (4096 bytes)
 /// - [4144..4256]: page metadata (112 bytes)
+///
+/// For Normal pages: contents = SHA384(page_data) (48 bytes), zero-padded to 4096.
+/// For VMSA pages: contents = raw page_data (4096 bytes).
 fn gctx_update(ld: &mut [u8; 48], page_contents: &[u8; 4096], page_type: u8, gpa: u64) {
     let mut page_info = [0u8; 4256];
 
     // Current launch digest
     page_info[0..48].copy_from_slice(ld);
 
-    // Page contents
-    page_info[48..4144].copy_from_slice(page_contents);
+    // Page contents field depends on page type
+    if page_type == PAGE_TYPE_NORMAL {
+        // Normal pages: SHA-384 hash the page data, place 48-byte digest at [48..96]
+        let page_hash = Sha384::digest(page_contents);
+        page_info[48..96].copy_from_slice(&page_hash);
+        // Rest of [96..4144] stays zero
+    } else {
+        // VMSA pages: raw 4096-byte content
+        page_info[48..4144].copy_from_slice(page_contents);
+    }
 
     // Page metadata (112 bytes at offset 4144)
     // u16 LE: page_info_size = 0x0070 (112)
