@@ -788,6 +788,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "serde_with 1.14.0",
+ "sha2 0.10.9",
  "starknet-crypto",
  "starknet-types-core",
  "x509-verifier-rust-crypto",

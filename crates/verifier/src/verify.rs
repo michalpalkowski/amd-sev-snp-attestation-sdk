@@ -1,4 +1,4 @@
-use alloy_primitives::B256;
+use alloy_primitives::{Bytes, B256};
 use anyhow::{bail, Context};
 use x509_verifier_rust_crypto::x509_parser::oid_registry::asn1_rs::{oid, Oid};
 use x509_verifier_rust_crypto::x509_parser::prelude::{X509Extension, X509Name};
@@ -214,5 +214,8 @@ pub fn verify_attestation(input: VerifierInput) -> anyhow::Result<VerifierJourna
         certs: vek_cert_chain.digest().to_vec(),
         certSerials: vek_cert_chain.serials(),
         storageCommitment: B256::ZERO,
+        measurement: Bytes::new(),
+        forkBlock: 0,
+        forkUrlHash: B256::ZERO,
     })
 }

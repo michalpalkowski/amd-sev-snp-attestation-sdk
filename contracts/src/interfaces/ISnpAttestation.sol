@@ -33,6 +33,8 @@ struct VerifierInput {
     // Nonce-based replay protection (Ethereum-style): commitment = hash(storage_commitment, contractAddress, nonce, globalStateRoot)
     bytes32 contractAddress;
     uint64 nonce;
+    // Kernel cmdline for measurement verification (contains fork_url, fork_block, etc.)
+    string kernelCmdline;
 }
 
 struct VerifierJournal {
@@ -45,6 +47,12 @@ struct VerifierJournal {
     uint8 trustedCertsPrefixLen;
     // Commitment to verified storage (keccak256(abi.encode(keys, values))). 0 when no storage proof.
     bytes32 storageCommitment;
+    // Measurement verified inside ZK circuit (48 bytes, from attestation report). Empty when no cmdline provided.
+    bytes measurement;
+    // Fork block number parsed from kernel cmdline. 0 when no cmdline provided.
+    uint64 forkBlock;
+    // SHA-256 of fork URL from kernel cmdline. 0 when no cmdline provided.
+    bytes32 forkUrlHash;
 }
 
 /// @dev Used to compute storage commitment: commitment = keccak256(abi.encode(StorageCommitmentInput(keys, values)))
