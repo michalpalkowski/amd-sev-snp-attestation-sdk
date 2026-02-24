@@ -74,6 +74,8 @@ pub fn verify_event_proof(
     let root = Felt::from_bytes_be(events_commitment);
     let expected_value = Felt::from_bytes_be(event_hash);
 
+    ensure!(expected_value != Felt::ZERO, "event hash must not be zero");
+
     let proof_bytes = proof_nodes
         .first()
         .context("event proof requires proof_nodes[0]")?;
