@@ -33,6 +33,19 @@ struct VerifierInput {
     // Nonce-based replay protection (Ethereum-style): commitment = hash(storage_commitment, contractAddress, nonce, globalStateRoot)
     bytes32 contractAddress;
     uint64 nonce;
+    // Fork block number: the L1/L2 block that Katana forked from.
+    // TEE includes this in report_data: Poseidon(state_root, block_hash, fork_block_number, events_commitment).
+    // 0 means non-fork mode.
+    uint64 forkBlockNumber;
+    // Event inclusion proof (C2: shard ending verification).
+    // Proves a ShardFinished event exists in the block's events_commitment (Merkle root).
+    // events_commitment is bound to TEE attestation via report_data.
+    bytes32 eventsCommitment;
+    bytes32 eventHash;
+    uint32 eventIndex;
+    uint32 eventsCount;
+    bytes[] eventMerkleProof;    // Scale-encoded MultiProof (Poseidon hash, 64-bit keys)
+    uint64 endBlockNumber;       // Block number where the event was found
 }
 
 struct VerifierJournal {
@@ -45,6 +58,11 @@ struct VerifierJournal {
     uint8 trustedCertsPrefixLen;
     // Commitment to verified storage (keccak256(abi.encode(keys, values))). 0 when no storage proof.
     bytes32 storageCommitment;
+    // Fork block number from input, forwarded for on-chain verification.
+    // 0 means non-fork mode.
+    uint64 forkBlockNumber;
+    // Block where ShardFinished event was proven by SP1 (0 = no event proof).
+    uint64 endBlockNumber;
 }
 
 /// @dev Used to compute storage commitment: commitment = keccak256(abi.encode(StorageCommitmentInput(keys, values)))

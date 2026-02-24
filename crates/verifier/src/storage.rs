@@ -53,6 +53,56 @@ pub fn compute_commitment(
     Poseidon::hash_array(&data)
 }
 
+/// Verifies an event inclusion proof against the events_commitment Merkle root.
+///
+/// Events use a BonsaiStorage trie with Poseidon hash and 64-bit keys (event index as usize).
+/// The proof format is the same scale-encoded MultiProof as storage proofs.
+pub fn verify_event_proof(
+    events_commitment: &[u8; 32],
+    event_hash: &[u8; 32],
+    event_index: u32,
+    events_count: u32,
+    proof_nodes: &[Bytes],
+) -> anyhow::Result<()> {
+    ensure!(
+        (event_index as usize) < events_count as usize,
+        "event_index {} out of bounds (events_count {})",
+        event_index,
+        events_count
+    );
+
+    let root = Felt::from_bytes_be(events_commitment);
+    let expected_value = Felt::from_bytes_be(event_hash);
+
+    let proof_bytes = proof_nodes
+        .first()
+        .context("event proof requires proof_nodes[0]")?;
+    let multiproof = decode_bonsai_multiproof(proof_bytes)?;
+
+    // Event trie key = event_index as usize, encoded as 8 big-endian bytes → 64 bits
+    let key_bytes = (event_index as usize).to_be_bytes();
+    let key_bits = bitvec::vec::BitVec::<u8, bitvec::order::Msb0>::from_slice(&key_bytes);
+
+    let verified_values: Vec<Felt> = multiproof
+        .verify_proof::<Poseidon>(root, std::iter::once(key_bits.as_bitslice()), 64)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("event proof verification failed: {}", e))?;
+
+    ensure!(
+        verified_values.len() == 1,
+        "event proof should return exactly 1 value, got {}",
+        verified_values.len()
+    );
+    ensure!(
+        verified_values[0] == expected_value,
+        "event proof value mismatch: expected {:#x}, got {:#x}",
+        expected_value,
+        verified_values[0]
+    );
+
+    Ok(())
+}
+
 /// STARKNET_STATE_V0 short string as Felt
 const STARKNET_STATE_V0: Felt = Felt::from_hex_unchecked("0x535441524b4e45545f53544154455f5630");
 
@@ -613,5 +663,149 @@ mod tests {
 
         let result = verify_storage_proof(&state_root, &keys, &values, &proof_nodes);
         assert!(result.is_err(), "should fail with wrong value");
+    }
+
+    // ── Event proof tests ──────────────────────────────────────────────
+
+    /// Helper for building event tries (Poseidon hash, 64-bit keys).
+    /// Matches the trie built by katana-trie's compute_merkle_root.
+    struct TestEventTrie {
+        storage: BonsaiStorage<bonsai_trie::id::BasicId, HashMapDb<bonsai_trie::id::BasicId>, Poseidon>,
+        values: Vec<Felt>,
+    }
+
+    impl TestEventTrie {
+        fn new() -> Self {
+            let config = BonsaiStorageConfig::default();
+            let db = HashMapDb::<bonsai_trie::id::BasicId>::default();
+            let storage = BonsaiStorage::<_, _, Poseidon>::new(db, config, 64);
+            Self { storage, values: vec![] }
+        }
+
+        fn insert(&mut self, value: Felt) {
+            let identifier = b"1";
+            let index = self.values.len();
+            let key = bitvec::vec::BitVec::<u8, bitvec::order::Msb0>::from_slice(
+                &index.to_be_bytes(),
+            );
+            self.storage.insert(identifier, key.as_bitslice(), &value).unwrap();
+            self.values.push(value);
+        }
+
+        fn commit(&mut self) -> Felt {
+            let identifier = b"1";
+            let id = BasicIdBuilder::new().new_id();
+            self.storage.commit(id).unwrap();
+            self.storage.root_hash(identifier).unwrap()
+        }
+
+        fn get_proof(&mut self, index: usize) -> bonsai_trie::MultiProof {
+            let identifier = b"1";
+            let key = bitvec::vec::BitVec::<u8, bitvec::order::Msb0>::from_slice(
+                &index.to_be_bytes(),
+            );
+            self.storage
+                .get_multi_proof(identifier, vec![key])
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn test_verify_event_proof_single_event() {
+        let mut trie = TestEventTrie::new();
+        let event_hash = Felt::from_hex("0xdeadbeef").unwrap();
+        trie.insert(event_hash);
+
+        let root = trie.commit();
+        let proof = trie.get_proof(0);
+        let encoded = TestTrie::encode_proof(&proof);
+
+        let result = verify_event_proof(
+            &root.to_bytes_be(),
+            &event_hash.to_bytes_be(),
+            0,
+            1,
+            &[Bytes::from(encoded)],
+        );
+        assert!(result.is_ok(), "event proof failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_verify_event_proof_multiple_events() {
+        let mut trie = TestEventTrie::new();
+        let events: Vec<Felt> = (0..5).map(|i| Felt::from(100u64 + i)).collect();
+        for ev in &events {
+            trie.insert(*ev);
+        }
+
+        let root = trie.commit();
+
+        // Prove event at index 3
+        let proof = trie.get_proof(3);
+        let encoded = TestTrie::encode_proof(&proof);
+
+        let result = verify_event_proof(
+            &root.to_bytes_be(),
+            &events[3].to_bytes_be(),
+            3,
+            5,
+            &[Bytes::from(encoded)],
+        );
+        assert!(result.is_ok(), "event proof for index 3 failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_verify_event_proof_wrong_root_fails() {
+        let mut trie = TestEventTrie::new();
+        let event_hash = Felt::from(42u64);
+        trie.insert(event_hash);
+
+        let _correct_root = trie.commit();
+        let proof = trie.get_proof(0);
+        let encoded = TestTrie::encode_proof(&proof);
+
+        let wrong_root = [1u8; 32];
+        let result = verify_event_proof(
+            &wrong_root,
+            &event_hash.to_bytes_be(),
+            0,
+            1,
+            &[Bytes::from(encoded)],
+        );
+        assert!(result.is_err(), "should fail with wrong root");
+    }
+
+    #[test]
+    fn test_verify_event_proof_wrong_hash_fails() {
+        let mut trie = TestEventTrie::new();
+        let event_hash = Felt::from(42u64);
+        trie.insert(event_hash);
+
+        let root = trie.commit();
+        let proof = trie.get_proof(0);
+        let encoded = TestTrie::encode_proof(&proof);
+
+        let wrong_hash = Felt::from(999u64);
+        let result = verify_event_proof(
+            &root.to_bytes_be(),
+            &wrong_hash.to_bytes_be(),
+            0,
+            1,
+            &[Bytes::from(encoded)],
+        );
+        assert!(result.is_err(), "should fail with wrong event hash");
+    }
+
+    #[test]
+    fn test_verify_event_proof_index_out_of_bounds() {
+        let result = verify_event_proof(
+            &[0u8; 32],
+            &[0u8; 32],
+            5,  // index >= count
+            3,
+            &[Bytes::from(vec![0u8])],
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("out of bounds"));
     }
 }

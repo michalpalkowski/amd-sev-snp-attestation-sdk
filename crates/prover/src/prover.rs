@@ -288,6 +288,15 @@ impl AmdSevSnpProver {
             // Replay protection
             contractAddress: B256::ZERO,
             nonce: 0,
+            // Fork block (0 = non-fork mode)
+            forkBlockNumber: 0,
+            // Event proof (empty = no event proof)
+            eventsCommitment: B256::ZERO,
+            eventHash: B256::ZERO,
+            eventIndex: 0,
+            eventsCount: 0,
+            eventMerkleProof: vec![],
+            endBlockNumber: 0,
         })
     }
 

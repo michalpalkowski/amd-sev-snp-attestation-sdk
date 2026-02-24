@@ -214,5 +214,7 @@ pub fn verify_attestation(input: VerifierInput) -> anyhow::Result<VerifierJourna
         certs: vek_cert_chain.digest().to_vec(),
         certSerials: vek_cert_chain.serials(),
         storageCommitment: B256::ZERO,
+        forkBlockNumber: input.forkBlockNumber,
+        endBlockNumber: 0,
     })
 }
