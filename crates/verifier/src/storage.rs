@@ -44,12 +44,14 @@ pub fn compute_commitment(
     contract_address: &[u8; 32],
     nonce: u64,
     global_state_root: &[u8; 32],
+    end_block_number: u64,
 ) -> Felt {
-    let mut data = Vec::with_capacity(4);
+    let mut data = Vec::with_capacity(5);
     data.push(*storage_commitment);
     data.push(Felt::from_bytes_be(contract_address));
     data.push(Felt::from(nonce));
     data.push(Felt::from_bytes_be(global_state_root));
+    data.push(Felt::from(end_block_number));
     Poseidon::hash_array(&data)
 }
 
@@ -452,10 +454,10 @@ mod tests {
         let nonce = 0u64;
         let storage_state_root = [0u8; 32];
 
-        let commitment = compute_commitment(&storage_commitment, &contract_address, nonce, &storage_state_root);
+        let commitment = compute_commitment(&storage_commitment, &contract_address, nonce, &storage_state_root, 0);
 
         // This is the final commitment that gets registered on-chain
-        // commitment = poseidon_hash([storage_commitment, contract_address, nonce, storage_state_root])
+        // commitment = poseidon_hash([storage_commitment, contract_address, nonce, storage_state_root, end_block_number])
         assert!(!commitment.to_bytes_be().iter().all(|&b| b == 0), "commitment should not be zero");
     }
 
@@ -474,8 +476,8 @@ mod tests {
         let contract_address = [0u8; 32];
         let storage_state_root = [0u8; 32];
 
-        let commitment_nonce_0 = compute_commitment(&storage_commitment, &contract_address, 0, &storage_state_root);
-        let commitment_nonce_1 = compute_commitment(&storage_commitment, &contract_address, 1, &storage_state_root);
+        let commitment_nonce_0 = compute_commitment(&storage_commitment, &contract_address, 0, &storage_state_root, 0);
+        let commitment_nonce_1 = compute_commitment(&storage_commitment, &contract_address, 1, &storage_state_root, 0);
 
         // Different nonces should produce different commitments (replay protection)
         assert_ne!(commitment_nonce_0, commitment_nonce_1);
@@ -498,8 +500,8 @@ mod tests {
         contract_address_b[31] = 1; // Different contract
         let storage_state_root = [0u8; 32];
 
-        let commitment_a = compute_commitment(&storage_commitment, &contract_address_a, 0, &storage_state_root);
-        let commitment_b = compute_commitment(&storage_commitment, &contract_address_b, 0, &storage_state_root);
+        let commitment_a = compute_commitment(&storage_commitment, &contract_address_a, 0, &storage_state_root, 0);
+        let commitment_b = compute_commitment(&storage_commitment, &contract_address_b, 0, &storage_state_root, 0);
 
         // Different contract addresses should produce different commitments
         assert_ne!(commitment_a, commitment_b);
