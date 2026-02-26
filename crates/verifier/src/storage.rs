@@ -57,7 +57,7 @@ pub fn compute_commitment(
 
 /// Verifies an event inclusion proof against the events_commitment Merkle root.
 ///
-/// Events use a BonsaiStorage trie with Poseidon hash and 64-bit keys (event index as usize).
+/// Events use a BonsaiStorage trie with Poseidon hash and 64-bit keys (event index as u64).
 /// The proof format is the same scale-encoded MultiProof as storage proofs.
 pub fn verify_event_proof(
     events_commitment: &[u8; 32],
@@ -83,8 +83,9 @@ pub fn verify_event_proof(
         .context("event proof requires proof_nodes[0]")?;
     let multiproof = decode_bonsai_multiproof(proof_bytes)?;
 
-    // Event trie key = event_index as usize, encoded as 8 big-endian bytes → 64 bits
-    let key_bytes = (event_index as usize).to_be_bytes();
+    // Event trie key = event_index as u64, encoded as 8 big-endian bytes → 64 bits
+    // NOTE: must use u64 (not usize) because SP1 is a 32-bit RISC-V VM where usize = 4 bytes
+    let key_bytes = (event_index as u64).to_be_bytes();
     let key_bits = bitvec::vec::BitVec::<u8, bitvec::order::Msb0>::from_slice(&key_bytes);
 
     let verified_values: Vec<Felt> = multiproof
