@@ -18,7 +18,7 @@ pub fn entrypoint() -> anyhow::Result<()> {
     // Verify TEE attestation (report signature, certificates, etc.)
     let mut output = verify_attestation(verifier_input.clone())?;
 
-    // Verify event inclusion proof (C2: shard ending verification)
+    // Verify event inclusion proof
     // Done BEFORE storage proof so endBlockNumber is available for commitment.
     if !verifier_input.eventMerkleProof.is_empty() {
         verify_event_proof(
@@ -59,7 +59,7 @@ pub fn entrypoint() -> anyhow::Result<()> {
         )?;
 
         // Compute commitment using global_state_root (the attested root)
-        // end_block_number is included so it's cryptographically bound (0 if no event proof)
+        // end_block_number is included so it's cryptographically bound
         let storage_commitment = compute_storage_commitment(
             &verifier_input.storageKeys,
             &verifier_input.storageValues,
