@@ -58,6 +58,9 @@ struct VerifierJournal {
     uint8 trustedCertsPrefixLen;
     // Commitment to verified storage (keccak256(abi.encode(keys, values))). 0 when no storage proof.
     bytes32 storageCommitment;
+    // Event root carried through the journal. When an event proof is present, SP1 verified inclusion
+    // against this exact root and KatanaTee must bind report_data to the same value.
+    bytes32 eventsCommitment;
     // Fork block number from input, forwarded for on-chain verification.
     // 0 means non-fork mode.
     uint64 forkBlockNumber;
