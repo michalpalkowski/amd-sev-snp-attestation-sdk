@@ -297,6 +297,11 @@ impl AmdSevSnpProver {
             eventsCount: 0,
             eventMerkleProof: vec![],
             endBlockNumber: 0,
+            // Event content (empty = no content verification)
+            eventTxHash: B256::ZERO,
+            eventFromAddress: B256::ZERO,
+            eventKeys: vec![],
+            eventData: vec![],
         })
     }
 

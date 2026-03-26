@@ -4,7 +4,8 @@ sp1_zkvm::entrypoint!(main);
 use alloy_primitives::B256;
 use amd_sev_snp_attestation_verifier::{
     compute_commitment, compute_storage_commitment, stub::VerifierInput, verify_attestation,
-    verify_contracts_proof, verify_event_proof, verify_global_state_root, verify_storage_proof,
+    verify_contracts_proof, verify_event_content, verify_event_proof, verify_global_state_root,
+    verify_storage_proof,
 };
 
 pub fn main() {
@@ -29,6 +30,25 @@ pub fn entrypoint() -> anyhow::Result<()> {
             &verifier_input.eventMerkleProof,
         )?;
         output.endBlockNumber = verifier_input.endBlockNumber;
+
+        // If event content fields are provided, verify the hash recomputation
+        if !verifier_input.eventKeys.is_empty() || !verifier_input.eventData.is_empty() {
+            verify_event_content(
+                &verifier_input.eventHash.0,
+                &verifier_input.eventTxHash.0,
+                &verifier_input.eventFromAddress.0,
+                &verifier_input.eventKeys,
+                &verifier_input.eventData,
+            )?;
+
+            // Extract proven game_contract and shard_id for journal output
+            if !verifier_input.eventKeys.is_empty() {
+                output.eventGameContract = verifier_input.eventKeys[0];
+            }
+            if !verifier_input.eventData.is_empty() {
+                output.eventShardId = verifier_input.eventData[0];
+            }
+        }
     }
 
     // Full state verification (only if storage keys provided)

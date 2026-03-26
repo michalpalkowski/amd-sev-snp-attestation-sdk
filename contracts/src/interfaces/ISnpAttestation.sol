@@ -46,6 +46,13 @@ struct VerifierInput {
     uint32 eventsCount;
     bytes[] eventMerkleProof;    // Scale-encoded MultiProof (Poseidon hash, 64-bit keys)
     uint64 endBlockNumber;       // Block number where the event was found
+    // Event content fields for hash recomputation (Phase 0 soundness fix).
+    // When non-empty, SP1 recomputes event_hash = Poseidon(txHash, fromAddress, H(keys), H(data))
+    // and verifies it matches the Merkle-proved eventHash.
+    bytes32 eventTxHash;
+    bytes32 eventFromAddress;
+    bytes32[] eventKeys;
+    bytes32[] eventData;
 }
 
 struct VerifierJournal {
@@ -66,6 +73,9 @@ struct VerifierJournal {
     uint64 forkBlockNumber;
     // Block where ShardFinished event was proven by SP1 (0 = no event proof).
     uint64 endBlockNumber;
+    // SP1-proved event content (0 = no event content verification).
+    bytes32 eventGameContract;  // keys[0] from ShardFinished event
+    bytes32 eventShardId;       // data[0] from ShardFinished event
 }
 
 /// @dev Used to compute storage commitment: commitment = keccak256(abi.encode(StorageCommitmentInput(keys, values)))

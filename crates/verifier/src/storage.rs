@@ -108,6 +108,50 @@ pub fn verify_event_proof(
     Ok(())
 }
 
+/// Verify event content by recomputing the event hash from its components.
+///
+/// The Starknet event hash formula is:
+/// `event_hash = Poseidon(tx_hash, from_address, H(keys), H(data))`
+/// where H is Poseidon::hash_array.
+///
+/// This proves that the Merkle-proved event_hash corresponds to an event
+/// with the claimed tx_hash, from_address, keys, and data.
+pub fn verify_event_content(
+    expected_event_hash: &[u8; 32],
+    tx_hash: &[u8; 32],
+    from_address: &[u8; 32],
+    keys: &[alloy_primitives::B256],
+    data: &[alloy_primitives::B256],
+) -> anyhow::Result<()> {
+    let tx_hash_felt = Felt::from_bytes_be(tx_hash);
+    let from_address_felt = Felt::from_bytes_be(from_address);
+
+    let keys_felts: Vec<Felt> = keys.iter().map(|k| Felt::from_bytes_be(&k.0)).collect();
+    let data_felts: Vec<Felt> = data.iter().map(|d| Felt::from_bytes_be(&d.0)).collect();
+
+    let keys_hash = Poseidon::hash_array(&keys_felts);
+    let data_hash = Poseidon::hash_array(&data_felts);
+
+    let computed_hash = Poseidon::hash_array(&[
+        tx_hash_felt,
+        from_address_felt,
+        keys_hash,
+        data_hash,
+    ]);
+
+    let expected = Felt::from_bytes_be(expected_event_hash);
+
+    ensure!(
+        computed_hash == expected,
+        "event content hash mismatch: computed {:#x}, expected {:#x}. \
+         Event content does not match the Merkle-proved event_hash.",
+        computed_hash,
+        expected,
+    );
+
+    Ok(())
+}
+
 /// STARKNET_STATE_V0 short string as Felt
 const STARKNET_STATE_V0: Felt = Felt::from_hex_unchecked("0x535441524b4e45545f53544154455f5630");
 
@@ -812,5 +856,139 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("out of bounds"));
+    }
+
+    // ── Event content verification tests ─────────────────────────────
+
+    /// Helper to compute the expected event hash from components using Poseidon.
+    fn compute_event_hash(
+        tx_hash: Felt,
+        from_address: Felt,
+        keys: &[Felt],
+        data: &[Felt],
+    ) -> Felt {
+        let keys_hash = Poseidon::hash_array(keys);
+        let data_hash = Poseidon::hash_array(data);
+        Poseidon::hash_array(&[tx_hash, from_address, keys_hash, data_hash])
+    }
+
+    #[test]
+    fn test_verify_event_content_valid() {
+        use alloy_primitives::B256;
+
+        let tx_hash = Felt::from_hex("0xabc123").unwrap();
+        let from_address = Felt::from_hex("0xdef456").unwrap();
+        let keys = vec![Felt::from(1u64), Felt::from(2u64)];
+        let data = vec![Felt::from(100u64), Felt::from(200u64)];
+
+        let event_hash = compute_event_hash(tx_hash, from_address, &keys, &data);
+
+        let keys_b256: Vec<B256> = keys.iter().map(|k| B256::from(k.to_bytes_be())).collect();
+        let data_b256: Vec<B256> = data.iter().map(|d| B256::from(d.to_bytes_be())).collect();
+
+        let result = verify_event_content(
+            &event_hash.to_bytes_be(),
+            &tx_hash.to_bytes_be(),
+            &from_address.to_bytes_be(),
+            &keys_b256,
+            &data_b256,
+        );
+        assert!(result.is_ok(), "valid event content should verify: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_verify_event_content_wrong_tx_hash() {
+        use alloy_primitives::B256;
+
+        let tx_hash = Felt::from_hex("0xabc123").unwrap();
+        let from_address = Felt::from_hex("0xdef456").unwrap();
+        let keys = vec![Felt::from(1u64)];
+        let data = vec![Felt::from(100u64)];
+
+        let event_hash = compute_event_hash(tx_hash, from_address, &keys, &data);
+
+        let wrong_tx_hash = Felt::from_hex("0x999999").unwrap();
+        let keys_b256: Vec<B256> = keys.iter().map(|k| B256::from(k.to_bytes_be())).collect();
+        let data_b256: Vec<B256> = data.iter().map(|d| B256::from(d.to_bytes_be())).collect();
+
+        let result = verify_event_content(
+            &event_hash.to_bytes_be(),
+            &wrong_tx_hash.to_bytes_be(),
+            &from_address.to_bytes_be(),
+            &keys_b256,
+            &data_b256,
+        );
+        assert!(result.is_err(), "wrong tx_hash should fail");
+        assert!(result.unwrap_err().to_string().contains("event content hash mismatch"));
+    }
+
+    #[test]
+    fn test_verify_event_content_wrong_data() {
+        use alloy_primitives::B256;
+
+        let tx_hash = Felt::from_hex("0xabc123").unwrap();
+        let from_address = Felt::from_hex("0xdef456").unwrap();
+        let keys = vec![Felt::from(1u64)];
+        let data = vec![Felt::from(100u64)];
+
+        let event_hash = compute_event_hash(tx_hash, from_address, &keys, &data);
+
+        let wrong_data: Vec<B256> = vec![B256::from(Felt::from(999u64).to_bytes_be())];
+        let keys_b256: Vec<B256> = keys.iter().map(|k| B256::from(k.to_bytes_be())).collect();
+
+        let result = verify_event_content(
+            &event_hash.to_bytes_be(),
+            &tx_hash.to_bytes_be(),
+            &from_address.to_bytes_be(),
+            &keys_b256,
+            &wrong_data,
+        );
+        assert!(result.is_err(), "wrong data should fail");
+    }
+
+    #[test]
+    fn test_verify_event_content_empty_keys_and_data() {
+        use alloy_primitives::B256;
+
+        let tx_hash = Felt::from_hex("0xabc123").unwrap();
+        let from_address = Felt::from_hex("0xdef456").unwrap();
+        let keys: Vec<Felt> = vec![];
+        let data: Vec<Felt> = vec![];
+
+        let event_hash = compute_event_hash(tx_hash, from_address, &keys, &data);
+
+        let result = verify_event_content(
+            &event_hash.to_bytes_be(),
+            &tx_hash.to_bytes_be(),
+            &from_address.to_bytes_be(),
+            &Vec::<B256>::new(),
+            &Vec::<B256>::new(),
+        );
+        assert!(result.is_ok(), "empty keys/data should verify if hash matches: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_verify_event_content_wrong_from_address() {
+        use alloy_primitives::B256;
+
+        let tx_hash = Felt::from_hex("0xabc123").unwrap();
+        let from_address = Felt::from_hex("0xdef456").unwrap();
+        let keys = vec![Felt::from(1u64)];
+        let data = vec![Felt::from(100u64)];
+
+        let event_hash = compute_event_hash(tx_hash, from_address, &keys, &data);
+
+        let wrong_from = Felt::from_hex("0x111111").unwrap();
+        let keys_b256: Vec<B256> = keys.iter().map(|k| B256::from(k.to_bytes_be())).collect();
+        let data_b256: Vec<B256> = data.iter().map(|d| B256::from(d.to_bytes_be())).collect();
+
+        let result = verify_event_content(
+            &event_hash.to_bytes_be(),
+            &tx_hash.to_bytes_be(),
+            &wrong_from.to_bytes_be(),
+            &keys_b256,
+            &data_b256,
+        );
+        assert!(result.is_err(), "wrong from_address should fail");
     }
 }
