@@ -16,13 +16,13 @@ pub fn entrypoint() -> anyhow::Result<()> {
     let input = sp1_zkvm::io::read_vec();
     let verifier_input = VerifierInput::decode(&input)?;
 
-    // Enforce all-or-nothing: either attestation-only (no shard data)
-    // or full sharding flow (event proof + storage proof together).
+    // Storage proof requires event proof (event proves shard ended).
+    // Event-only is valid (empty shard, no storage changes).
     let has_event = !verifier_input.eventMerkleProof.is_empty();
     let has_storage = !verifier_input.storageKeys.is_empty();
     anyhow::ensure!(
-        has_event == has_storage,
-        "Partial shard proof: event and storage must both be present or both absent"
+        !has_storage || has_event,
+        "Storage proof requires event proof (cannot prove storage changes without proving shard ended)"
     );
 
     // ── 1. Attestation ──────────────────────────────────────────────────
