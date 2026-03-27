@@ -302,6 +302,18 @@ impl AmdSevSnpProver {
             eventFromAddress: B256::ZERO,
             eventKeys: vec![],
             eventData: vec![],
+            // Initial storage proof at fork block (empty = no initial proof)
+            forkStateRoot: B256::ZERO,
+            forkContractsTreeRoot: B256::ZERO,
+            forkClassesTreeRoot: B256::ZERO,
+            forkContractsProofNodes: vec![],
+            forkContractStorageRoot: B256::ZERO,
+            forkContractClassHash: B256::ZERO,
+            forkContractLeafNonce: 0,
+            initialKeys: vec![],
+            initialValues: vec![],
+            initialProofNodes: vec![],
+            initialNonce: 0,
         })
     }
 

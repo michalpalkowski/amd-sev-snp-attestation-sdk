@@ -53,6 +53,20 @@ struct VerifierInput {
     bytes32 eventFromAddress;
     bytes32[] eventKeys;
     bytes32[] eventData;
+    // Initial storage proof at fork block (S1 soundness fix).
+    // Proves Add CRDT initial_values existed in the contract's storage trie at fork time.
+    // Empty when no initial proof is needed (non-Add slots or non-fork mode).
+    bytes32 forkStateRoot;
+    bytes32 forkContractsTreeRoot;
+    bytes32 forkClassesTreeRoot;
+    bytes[] forkContractsProofNodes;
+    bytes32 forkContractStorageRoot;
+    bytes32 forkContractClassHash;
+    uint64 forkContractLeafNonce;
+    bytes[] initialKeys;
+    bytes[] initialValues;
+    bytes[] initialProofNodes;
+    uint64 initialNonce;           // Replay protection nonce for initial commitment
 }
 
 /// TEE attestation certificate chain verification results.
@@ -82,6 +96,10 @@ struct ShardProof {
     // SP1-proved event content (0 = no event content verification).
     bytes32 eventGameContract;  // keys[0] from ShardFinished event
     bytes32 eventShardId;       // data[0] from ShardFinished event
+    // Commitment to verified initial storage at fork block (0 = no initial proof).
+    bytes32 initialStorageCommitment;
+    // Fork state root attested by TEE, forwarded for on-chain verification.
+    bytes32 forkStateRoot;
 }
 
 /// SP1 public output combining attestation and shard proof data.
