@@ -16,18 +16,23 @@ pub fn entrypoint() -> anyhow::Result<()> {
     let input = sp1_zkvm::io::read_vec();
     let verifier_input = VerifierInput::decode(&input)?;
 
+    // Enforce all-or-nothing: either attestation-only (no shard data)
+    // or full sharding flow (event proof + storage proof together).
+    let has_event = !verifier_input.eventMerkleProof.is_empty();
+    let has_storage = !verifier_input.storageKeys.is_empty();
+    anyhow::ensure!(
+        has_event == has_storage,
+        "Partial shard proof: event and storage must both be present or both absent"
+    );
+
     // ── 1. Attestation ──────────────────────────────────────────────────
-    // Verify TEE report signature, certificate chain, and trust anchors.
-    // Produces the base journal with attestation.* fields populated.
     let mut output = verify_attestation(verifier_input.clone())?;
 
     // ── 2. Event proof ──────────────────────────────────────────────────
-    // Prove ShardFinished event exists in the attested block.
-    // Must run before storage proof: endBlockNumber is bound into the commitment.
+    // Sets shard.endBlockNumber — required by storage proof commitment.
     verify_shard_event(&verifier_input, &mut output.shard)?;
 
     // ── 3. Storage proof ────────────────────────────────────────────────
-    // Prove storage key/value pairs against the attested global state root.
     verify_shard_storage(&verifier_input, &mut output.shard)?;
 
     sp1_zkvm::io::commit_slice(&output.encode());
