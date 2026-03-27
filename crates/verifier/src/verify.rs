@@ -4,7 +4,9 @@ use x509_verifier_rust_crypto::x509_parser::oid_registry::asn1_rs::{oid, Oid};
 use x509_verifier_rust_crypto::x509_parser::prelude::{X509Extension, X509Name};
 use x509_verifier_rust_crypto::{verify_signature, Cert, CertChain, PubKey, SigAlgo};
 
-use crate::stub::{ProcessorType, VerificationResult, VerifierInput, VerifierJournal};
+use crate::stub::{
+    AttestationCore, ProcessorType, ShardProof, VerificationResult, VerifierInput, VerifierJournal,
+};
 
 use super::attestation::AttestationReport;
 use super::types::CertType;
@@ -206,18 +208,22 @@ pub fn verify_attestation(input: VerifierInput) -> anyhow::Result<VerifierJourna
     let processor_model = get_processor_model_from_vek(vek_type, vek_cert_chain.leaf())?;
 
     Ok(VerifierJournal {
-        result: VerificationResult::Success,
-        trustedCertsPrefixLen: input.trustedCertsPrefixLen,
-        timestamp: input.timestamp,
-        rawReport: input.rawReport,
-        processorModel: processor_model as u8,
-        certs: vek_cert_chain.digest().to_vec(),
-        certSerials: vek_cert_chain.serials(),
-        storageCommitment: B256::ZERO,
-        eventsCommitment: input.eventsCommitment,
-        forkBlockNumber: input.forkBlockNumber,
-        endBlockNumber: 0,
-        eventGameContract: B256::ZERO,
-        eventShardId: B256::ZERO,
+        attestation: AttestationCore {
+            result: VerificationResult::Success,
+            trustedCertsPrefixLen: input.trustedCertsPrefixLen,
+            timestamp: input.timestamp,
+            rawReport: input.rawReport,
+            processorModel: processor_model as u8,
+            certs: vek_cert_chain.digest().to_vec(),
+            certSerials: vek_cert_chain.serials(),
+        },
+        shard: ShardProof {
+            storageCommitment: B256::ZERO,
+            eventsCommitment: input.eventsCommitment,
+            forkBlockNumber: input.forkBlockNumber,
+            endBlockNumber: 0,
+            eventGameContract: B256::ZERO,
+            eventShardId: B256::ZERO,
+        },
     })
 }

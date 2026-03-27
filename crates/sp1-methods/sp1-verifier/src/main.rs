@@ -16,84 +16,110 @@ pub fn entrypoint() -> anyhow::Result<()> {
     let input = sp1_zkvm::io::read_vec();
     let verifier_input = VerifierInput::decode(&input)?;
 
-    // Verify TEE attestation (report signature, certificates, etc.)
+    // ── 1. Attestation ──────────────────────────────────────────────────
+    // Verify TEE report signature, certificate chain, and trust anchors.
+    // Produces the base journal with attestation.* fields populated.
     let mut output = verify_attestation(verifier_input.clone())?;
 
-    // Verify event inclusion proof
-    // Done BEFORE storage proof so endBlockNumber is available for commitment.
-    if !verifier_input.eventMerkleProof.is_empty() {
-        verify_event_proof(
-            &verifier_input.eventsCommitment.0,
-            &verifier_input.eventHash.0,
-            verifier_input.eventIndex,
-            verifier_input.eventsCount,
-            &verifier_input.eventMerkleProof,
-        )?;
-        output.endBlockNumber = verifier_input.endBlockNumber;
+    // ── 2. Event proof ──────────────────────────────────────────────────
+    // Prove ShardFinished event exists in the attested block.
+    // Must run before storage proof: endBlockNumber is bound into the commitment.
+    verify_shard_event(&verifier_input, &mut output.shard)?;
 
-        // If event content fields are provided, verify the hash recomputation
-        if !verifier_input.eventKeys.is_empty() || !verifier_input.eventData.is_empty() {
-            verify_event_content(
-                &verifier_input.eventHash.0,
-                &verifier_input.eventTxHash.0,
-                &verifier_input.eventFromAddress.0,
-                &verifier_input.eventKeys,
-                &verifier_input.eventData,
-            )?;
-
-            // Extract proven game_contract and shard_id for journal output
-            if !verifier_input.eventKeys.is_empty() {
-                output.eventGameContract = verifier_input.eventKeys[0];
-            }
-            if !verifier_input.eventData.is_empty() {
-                output.eventShardId = verifier_input.eventData[0];
-            }
-        }
-    }
-
-    // Full state verification (only if storage keys provided)
-    if !verifier_input.storageKeys.is_empty() {
-        // Verify global_state_root = hash("STARKNET_STATE_V0", contracts_tree_root, classes_tree_root)
-        verify_global_state_root(
-            &verifier_input.globalStateRoot.0,
-            &verifier_input.contractsTreeRoot.0,
-            &verifier_input.classesTreeRoot.0,
-        )?;
-
-        // Verify contract is in contracts_tree with expected storage_root
-        verify_contracts_proof(
-            &verifier_input.contractsTreeRoot.0,
-            &verifier_input.contractAddress.0,
-            &verifier_input.contractClassHash.0,
-            &verifier_input.contractStorageRoot.0,
-            verifier_input.contractLeafNonce,
-            &verifier_input.contractsProofNodes,
-        )?;
-
-        // Verify storage keys/values are in contract's storage trie
-        verify_storage_proof(
-            &verifier_input.contractStorageRoot.0,
-            &verifier_input.storageKeys,
-            &verifier_input.storageValues,
-            &verifier_input.storageProofNodes,
-        )?;
-
-        // Compute commitment using global_state_root (the attested root)
-        // end_block_number is included so it's cryptographically bound
-        let storage_commitment = compute_storage_commitment(
-            &verifier_input.storageKeys,
-            &verifier_input.storageValues,
-        );
-        let commitment = compute_commitment(
-            &storage_commitment,
-            &verifier_input.contractAddress.0,
-            verifier_input.nonce,
-            &verifier_input.globalStateRoot.0,
-            output.endBlockNumber,
-        );
-        output.storageCommitment = B256::from_slice(&commitment.to_bytes_be());
-    }
+    // ── 3. Storage proof ────────────────────────────────────────────────
+    // Prove storage key/value pairs against the attested global state root.
+    verify_shard_storage(&verifier_input, &mut output.shard)?;
 
     sp1_zkvm::io::commit_slice(&output.encode());
+    Ok(())
+}
+
+/// Verify event inclusion + content. Populates `shard.endBlockNumber`,
+/// `shard.eventGameContract`, and `shard.eventShardId`.
+fn verify_shard_event(
+    input: &VerifierInput,
+    shard: &mut amd_sev_snp_attestation_verifier::stub::ShardProof,
+) -> anyhow::Result<()> {
+    if input.eventMerkleProof.is_empty() {
+        return Ok(());
+    }
+
+    // Merkle inclusion: event exists in the block's events commitment
+    verify_event_proof(
+        &input.eventsCommitment.0,
+        &input.eventHash.0,
+        input.eventIndex,
+        input.eventsCount,
+        &input.eventMerkleProof,
+    )?;
+    shard.endBlockNumber = input.endBlockNumber;
+
+    // Content verification: recompute event hash from components
+    if input.eventKeys.is_empty() && input.eventData.is_empty() {
+        return Ok(());
+    }
+    verify_event_content(
+        &input.eventHash.0,
+        &input.eventTxHash.0,
+        &input.eventFromAddress.0,
+        &input.eventKeys,
+        &input.eventData,
+    )?;
+    if !input.eventKeys.is_empty() {
+        shard.eventGameContract = input.eventKeys[0];
+    }
+    if !input.eventData.is_empty() {
+        shard.eventShardId = input.eventData[0];
+    }
+
+    Ok(())
+}
+
+/// Verify storage trie proof and compute the replay-protected commitment.
+/// Populates `shard.storageCommitment`.
+fn verify_shard_storage(
+    input: &VerifierInput,
+    shard: &mut amd_sev_snp_attestation_verifier::stub::ShardProof,
+) -> anyhow::Result<()> {
+    if input.storageKeys.is_empty() {
+        return Ok(());
+    }
+
+    // Global state root = hash("STARKNET_STATE_V0", contracts_root, classes_root)
+    verify_global_state_root(
+        &input.globalStateRoot.0,
+        &input.contractsTreeRoot.0,
+        &input.classesTreeRoot.0,
+    )?;
+
+    // Contract exists in contracts tree with expected storage root
+    verify_contracts_proof(
+        &input.contractsTreeRoot.0,
+        &input.contractAddress.0,
+        &input.contractClassHash.0,
+        &input.contractStorageRoot.0,
+        input.contractLeafNonce,
+        &input.contractsProofNodes,
+    )?;
+
+    // Storage keys/values exist in contract's storage trie
+    verify_storage_proof(
+        &input.contractStorageRoot.0,
+        &input.storageKeys,
+        &input.storageValues,
+        &input.storageProofNodes,
+    )?;
+
+    // Replay-protected commitment: hash(raw, address, nonce, state_root, end_block)
+    let raw = compute_storage_commitment(&input.storageKeys, &input.storageValues);
+    let commitment = compute_commitment(
+        &raw,
+        &input.contractAddress.0,
+        input.nonce,
+        &input.globalStateRoot.0,
+        shard.endBlockNumber,
+    );
+    shard.storageCommitment = B256::from_slice(&commitment.to_bytes_be());
+
     Ok(())
 }

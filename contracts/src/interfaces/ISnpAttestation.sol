@@ -55,7 +55,9 @@ struct VerifierInput {
     bytes32[] eventData;
 }
 
-struct VerifierJournal {
+/// TEE attestation certificate chain verification results.
+/// Contains the raw report, certificate hashes, and trust chain metadata.
+struct AttestationCore {
     VerificationResult result;
     uint64 timestamp;
     uint8 processorModel;
@@ -63,19 +65,29 @@ struct VerifierJournal {
     bytes32[] certs;
     uint160[] certSerials;
     uint8 trustedCertsPrefixLen;
+}
+
+/// SP1-proved shard settlement data.
+/// All fields are cryptographically bound to the SP1 proof.
+struct ShardProof {
     // Commitment to verified storage (keccak256(abi.encode(keys, values))). 0 when no storage proof.
     bytes32 storageCommitment;
     // Event root carried through the journal. When an event proof is present, SP1 verified inclusion
     // against this exact root and KatanaTee must bind report_data to the same value.
     bytes32 eventsCommitment;
-    // Fork block number from input, forwarded for on-chain verification.
-    // 0 means non-fork mode.
+    // Fork block number from input, forwarded for on-chain verification. 0 means non-fork mode.
     uint64 forkBlockNumber;
     // Block where ShardFinished event was proven by SP1 (0 = no event proof).
     uint64 endBlockNumber;
     // SP1-proved event content (0 = no event content verification).
     bytes32 eventGameContract;  // keys[0] from ShardFinished event
     bytes32 eventShardId;       // data[0] from ShardFinished event
+}
+
+/// SP1 public output combining attestation and shard proof data.
+struct VerifierJournal {
+    AttestationCore attestation;
+    ShardProof shard;
 }
 
 /// @dev Used to compute storage commitment: commitment = keccak256(abi.encode(StorageCommitmentInput(keys, values)))
