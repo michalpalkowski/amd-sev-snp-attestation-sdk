@@ -225,7 +225,7 @@ pub fn verify_attestation(input: VerifierInput) -> anyhow::Result<VerifierJourna
             eventGameContract: B256::ZERO,
             eventShardId: B256::ZERO,
             initialStorageCommitment: B256::ZERO,
-            forkStateRoot: B256::ZERO,
+            forkStateRoot: input.forkStateRoot,
         },
     })
 }
