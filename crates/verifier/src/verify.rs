@@ -229,3 +229,36 @@ pub fn verify_attestation(input: VerifierInput) -> anyhow::Result<VerifierJourna
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Schema guard: ShardProof field count must match protocol/schema.toml SHARD_PROOF_FIELD_COUNT = 8.
+    ///
+    /// If a field is added/removed from ISnpAttestation.sol ShardProof struct,
+    /// this test fails → update both the Solidity struct AND protocol/schema.toml.
+    #[test]
+    fn shard_proof_field_count_matches_schema() {
+        // Construct a ShardProof and verify it has exactly 8 fields.
+        // If a field is added, this won't compile until it's added here.
+        // If a field is removed, the struct literal will have a surplus field → compile error.
+        let _proof = ShardProof {
+            storageCommitment: B256::ZERO,       // 1
+            eventsCommitment: B256::ZERO,        // 2
+            forkBlockNumber: 0,                  // 3
+            endBlockNumber: 0,                   // 4
+            eventGameContract: B256::ZERO,       // 5
+            eventShardId: B256::ZERO,            // 6
+            initialStorageCommitment: B256::ZERO, // 7
+            forkStateRoot: B256::ZERO,           // 8
+        };
+        // ABI-encoded size: 8 fields × 32 bytes each = 256 bytes.
+        // B256 = 32 bytes, u64 padded to 32 bytes in ABI encoding.
+        use alloy_sol_types::SolValue;
+        assert_eq!(
+            _proof.abi_encoded_size(), 8 * 32,
+            "ShardProof should have 8 ABI-encoded fields (256 bytes)"
+        );
+    }
+}
