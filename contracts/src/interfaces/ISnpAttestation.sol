@@ -17,9 +17,61 @@ struct VerifierInput {
     uint8 trustedCertsPrefixLen;
     bytes rawReport;
     bytes[] vekDerChain;
+    // Global state verification (matches attestation report_data)
+    bytes32 globalStateRoot;
+    bytes32 contractsTreeRoot;
+    bytes32 classesTreeRoot;
+    // Contracts tree proof: verifies contract is in contracts_tree with expected storage_root
+    bytes[] contractsProofNodes;
+    bytes32 contractStorageRoot;  // Expected storage_root from contract leaf
+    bytes32 contractClassHash;    // For computing contract leaf hash
+    uint64 contractLeafNonce;     // Contract's nonce (different from replay protection nonce)
+    // Storage proof: verifies keys/values are in contract's storage trie
+    bytes[] storageKeys;
+    bytes[] storageValues;
+    bytes[] storageProofNodes;
+    // Nonce-based replay protection (Ethereum-style): commitment = hash(storage_commitment, contractAddress, nonce, globalStateRoot)
+    bytes32 contractAddress;
+    uint64 nonce;
+    // Fork block number: the L1/L2 block that Katana forked from.
+    // TEE includes this in report_data: Poseidon(state_root, block_hash, fork_block_number, events_commitment).
+    // 0 means non-fork mode.
+    uint64 forkBlockNumber;
+    // Event inclusion proof (C2: shard ending verification).
+    // Proves a ShardFinished event exists in the block's events_commitment (Merkle root).
+    // events_commitment is bound to TEE attestation via report_data.
+    bytes32 eventsCommitment;
+    bytes32 eventHash;
+    uint32 eventIndex;
+    uint32 eventsCount;
+    bytes[] eventMerkleProof;    // Scale-encoded MultiProof (Poseidon hash, 64-bit keys)
+    uint64 endBlockNumber;       // Block number where the event was found
+    // Event content fields for hash recomputation (Phase 0 soundness fix).
+    // When non-empty, SP1 recomputes event_hash = Poseidon(txHash, fromAddress, H(keys), H(data))
+    // and verifies it matches the Merkle-proved eventHash.
+    bytes32 eventTxHash;
+    bytes32 eventFromAddress;
+    bytes32[] eventKeys;
+    bytes32[] eventData;
+    // Initial storage proof at fork block (S1 soundness fix).
+    // Proves Add CRDT initial_values existed in the contract's storage trie at fork time.
+    // Empty when no initial proof is needed (non-Add slots or non-fork mode).
+    bytes32 forkStateRoot;
+    bytes32 forkContractsTreeRoot;
+    bytes32 forkClassesTreeRoot;
+    bytes[] forkContractsProofNodes;
+    bytes32 forkContractStorageRoot;
+    bytes32 forkContractClassHash;
+    uint64 forkContractLeafNonce;
+    bytes[] initialKeys;
+    bytes[] initialValues;
+    bytes[] initialProofNodes;
+    uint64 initialNonce;           // Replay protection nonce for initial commitment
 }
 
-struct VerifierJournal {
+/// TEE attestation certificate chain verification results.
+/// Contains the raw report, certificate hashes, and trust chain metadata.
+struct AttestationCore {
     VerificationResult result;
     uint64 timestamp;
     uint8 processorModel;
@@ -27,6 +79,39 @@ struct VerifierJournal {
     bytes32[] certs;
     uint160[] certSerials;
     uint8 trustedCertsPrefixLen;
+}
+
+/// SP1-proved shard settlement data.
+/// All fields are cryptographically bound to the SP1 proof.
+struct ShardProof {
+    // Commitment to verified storage (keccak256(abi.encode(keys, values))). 0 when no storage proof.
+    bytes32 storageCommitment;
+    // Event root carried through the journal. When an event proof is present, SP1 verified inclusion
+    // against this exact root and KatanaTee must bind report_data to the same value.
+    bytes32 eventsCommitment;
+    // Fork block number from input, forwarded for on-chain verification. 0 means non-fork mode.
+    uint64 forkBlockNumber;
+    // Block where ShardFinished event was proven by SP1 (0 = no event proof).
+    uint64 endBlockNumber;
+    // SP1-proved event content (0 = no event content verification).
+    bytes32 eventGameContract;  // keys[0] from ShardFinished event
+    bytes32 eventShardId;       // data[0] from ShardFinished event
+    // Commitment to verified initial storage at fork block (0 = no initial proof).
+    bytes32 initialStorageCommitment;
+    // Fork state root attested by TEE, forwarded for on-chain verification.
+    bytes32 forkStateRoot;
+}
+
+/// SP1 public output combining attestation and shard proof data.
+struct VerifierJournal {
+    AttestationCore attestation;
+    ShardProof shard;
+}
+
+/// @dev Used to compute storage commitment: commitment = keccak256(abi.encode(StorageCommitmentInput(keys, values)))
+struct StorageCommitmentInput {
+    bytes[] keys;
+    bytes[] values;
 }
 
 enum ZkCoProcessorType {

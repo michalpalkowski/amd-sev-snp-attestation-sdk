@@ -263,11 +263,31 @@ impl AttestationReport {
             let fam_id = self.cpuid_fam_id;
             let mod_id = self.cpuid_mod_id;
             let stepping = self.cpuid_step;
-            // 25: Zen 3, Zen 3+, Zen 4
+            // Family 25 (0x19): Zen 3, Zen 3+, Zen 4
             // Milan: Zen 3, Genoa: Zen 4, Bergamo: Zen 4c
             // Siena: Zen 4c, Turin: Zen 5, Venice: TBD.
-            if fam_id == 25 && mod_id == 1 {
-                return Ok(ProcessorType::Milan);
+            //
+            // References:
+            // - AMD Family 19h Models 10h-1Fh Revision Guide (AMD Pub #57095)
+            // - Linux kernel EDAC/k10temp patches for Family 19h Models 10h-1Fh and A0h-AFh
+            //   https://patchwork.kernel.org/project/linux-edac/patch/20211208174356.1997855-3-yazen.ghannam@amd.com/
+            // - QEMU EPYC-Genoa model definition (family=25, model=17)
+            //   https://www.mail-archive.com/qemu-devel@nongnu.org/msg1076318.html
+            if fam_id == 25 {
+                match mod_id {
+                    // Model 1 (0x01) = Milan (EPYC 7003 series, Zen 3)
+                    1 => return Ok(ProcessorType::Milan),
+                    // Model 16 (0x10) = Genoa A-step / engineering samples
+                    // Model 17 (0x11) = Genoa (EPYC 9004 series 91xx-96xx, Zen 4)
+                    // Ref: AMD PPR for Family 19h Models 11h (Pub #55901)
+                    16 | 17 => return Ok(ProcessorType::Genoa),
+                    // Model 160-175 (0xA0-0xAF) = Bergamo (EPYC 97x4 series, Zen 4c)
+                    // Note: Siena (EPYC 8004 series, SP6 socket) shares this model range
+                    // and cannot be distinguished from Bergamo (SP5 socket) by CPUID alone.
+                    // Ref: AMD EPYC 8004 Architecture Overview (Pub #58268) - Family 19h Models A0h-AFh
+                    160..=175 => return Ok(ProcessorType::Bergamo),
+                    _ => {}
+                }
             }
 
             bail!(

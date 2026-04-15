@@ -1,4 +1,4 @@
-use alloy_primitives::Bytes;
+use alloy_primitives::{Bytes, B256};
 use alloy_rpc_types::TransactionReceipt;
 use amd_sev_snp_attestation_verifier::{
     stub::{VerifierInput, VerifierJournal, ZkCoProcessorType},
@@ -13,23 +13,32 @@ use crate::{
     RawProofType, RemoteProverConfig, SnpVerifierContract, KDS,
 };
 
+#[cfg(feature = "pico")]
+use pico_methods::PICO_VERIFIER_ELF;
 #[cfg(feature = "risc0")]
 use risc0_methods::{self, RISC0_VERIFIER_ELF, RISC0_VERIFIER_ID};
 #[cfg(feature = "sp1")]
 use sp1_methods::{self, SP1_VERIFIER_ELF, SP1_VERIFIER_PK, SP1_VERIFIER_VK};
-#[cfg(feature = "pico")]
-use pico_methods::PICO_VERIFIER_ELF;
 
 #[cfg(feature = "sp1")]
 lazy_static! {
     pub static ref SP1_PROGRAM_VERIFIER: crate::ProgramSP1<ZkCoProcessorType, VerifierInput, VerifierJournal> =
-        crate::ProgramSP1::new(ZkCoProcessorType::Succinct, SP1_VERIFIER_ELF, &SP1_VERIFIER_VK, &SP1_VERIFIER_PK);
+        crate::ProgramSP1::new(
+            ZkCoProcessorType::Succinct,
+            SP1_VERIFIER_ELF,
+            &SP1_VERIFIER_VK,
+            &SP1_VERIFIER_PK
+        );
 }
 
 #[cfg(feature = "risc0")]
 lazy_static! {
     pub static ref RISC0_PROGRAM_VERIFIER: crate::ProgramRisc0<ZkCoProcessorType, VerifierInput, VerifierJournal> =
-        crate::ProgramRisc0::new(ZkCoProcessorType::RiscZero, RISC0_VERIFIER_ELF, *RISC0_VERIFIER_ID);
+        crate::ProgramRisc0::new(
+            ZkCoProcessorType::RiscZero,
+            RISC0_VERIFIER_ELF,
+            *RISC0_VERIFIER_ID
+        );
 }
 
 #[cfg(feature = "pico")]
@@ -56,11 +65,14 @@ impl AmdSevSnpProver {
         match &cfg.system {
             #[cfg(feature = "sp1")]
             ProverSystemConfig::Succinct(system_cfg) => {
+                if let Some(mode) = &system_cfg.prover_mode {
+                    std::env::set_var("SP1_PROVER", mode);
+                }
                 if let Some(api_url) = &system_cfg.rpc_url {
                     std::env::set_var("NETWORK_RPC_URL", api_url);
                 }
                 if let Some(api_key) = &system_cfg.private_key {
-                    std::env::set_var("NETWORK_API_KEY", api_key);
+                    std::env::set_var("NETWORK_PRIVATE_KEY", api_key);
                 }
                 AmdSevSnpProver {
                     kds: KDS::new(),
@@ -93,15 +105,13 @@ impl AmdSevSnpProver {
                 }
             }
             #[cfg(feature = "pico")]
-            ProverSystemConfig::Pico(_system_cfg) => {
-                AmdSevSnpProver {
-                    kds: KDS::new(),
-                    contract,
-                    remote_prover_config: Err("Remote prover not supported for Pico".to_string()),
-                    cfg,
-                    verifier: Box::new(PICO_PROGRAM_VERIFIER.clone()),
-                }
-            }
+            ProverSystemConfig::Pico(_system_cfg) => AmdSevSnpProver {
+                kds: KDS::new(),
+                contract,
+                remote_prover_config: Err("Remote prover not supported for Pico".to_string()),
+                cfg,
+                verifier: Box::new(PICO_PROGRAM_VERIFIER.clone()),
+            },
         }
     }
 
@@ -211,6 +221,11 @@ impl AmdSevSnpProver {
         Ok(self.create_onchain_proof(proof)?)
     }
 
+    /// Returns attestation-only input; storage fields are empty. For storage proof, the caller
+    /// (e.g. a higher-level crate like `sharding_operator`) should set `input.storageStateRoot`,
+    /// `input.storageKeys`, `input.storageValues`, and `input.storageProofNodes` on the result,
+    /// then pass it to `gen_proof`. This keeps the SDK modular (attestation here, storage logic
+    /// in the operator).
     pub fn prepare_verifier_input(
         &self,
         timestamp: u64,
@@ -225,7 +240,9 @@ impl AmdSevSnpProver {
         let cert_chain = CertChain::parse_rev(&vek_certs)?;
         cert_chain.verify_chain()?;
         cert_chain.check_valid(timestamp)?;
-        let mut trusted_certs_prefix_len = 2;
+        // Default to 1 (only root cert trusted) when no on-chain cache is available.
+        // This ensures the ZK program verifies the full chain from ASK → VCEK.
+        let mut trusted_certs_prefix_len = 1;
         if let Some(contract) = &self.contract {
             let program_id = block_on(contract.program_id(self.verifier.zktype()))?;
             let verify_result = self.get_program_id().verify(&program_id).with_context(|| {
@@ -255,6 +272,48 @@ impl AmdSevSnpProver {
             trustedCertsPrefixLen: trusted_certs_prefix_len,
             rawReport: raw_report,
             vekDerChain: cert_chain.to_ders(),
+            // Global state verification
+            globalStateRoot: B256::ZERO,
+            contractsTreeRoot: B256::ZERO,
+            classesTreeRoot: B256::ZERO,
+            // Contracts tree proof
+            contractsProofNodes: vec![],
+            contractStorageRoot: B256::ZERO,
+            contractClassHash: B256::ZERO,
+            contractLeafNonce: 0,
+            // Storage proof
+            storageKeys: vec![],
+            storageValues: vec![],
+            storageProofNodes: vec![],
+            // Replay protection
+            contractAddress: B256::ZERO,
+            nonce: 0,
+            // Fork block (0 = non-fork mode)
+            forkBlockNumber: 0,
+            // Event proof (empty = no event proof)
+            eventsCommitment: B256::ZERO,
+            eventHash: B256::ZERO,
+            eventIndex: 0,
+            eventsCount: 0,
+            eventMerkleProof: vec![],
+            endBlockNumber: 0,
+            // Event content (empty = no content verification)
+            eventTxHash: B256::ZERO,
+            eventFromAddress: B256::ZERO,
+            eventKeys: vec![],
+            eventData: vec![],
+            // Initial storage proof at fork block (empty = no initial proof)
+            forkStateRoot: B256::ZERO,
+            forkContractsTreeRoot: B256::ZERO,
+            forkClassesTreeRoot: B256::ZERO,
+            forkContractsProofNodes: vec![],
+            forkContractStorageRoot: B256::ZERO,
+            forkContractClassHash: B256::ZERO,
+            forkContractLeafNonce: 0,
+            initialKeys: vec![],
+            initialValues: vec![],
+            initialProofNodes: vec![],
+            initialNonce: 0,
         })
     }
 

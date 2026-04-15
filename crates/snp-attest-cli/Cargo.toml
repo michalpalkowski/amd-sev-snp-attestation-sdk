@@ -22,3 +22,6 @@ tracing-subscriber.workspace = true
 log.workspace = true
 tracing.workspace = true
 dotenvy.workspace = true
+sha2 = "0.10"
+serde_json.workspace = true
+hex = "0.4"
